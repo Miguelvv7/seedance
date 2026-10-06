@@ -18,7 +18,7 @@ npm run dev                  # http://localhost:3000
 | `APP_ACCESS_CODE` | Código que compartes con tus colegas. Cambiarlo cierra todas las sesiones |
 | `SESSION_SECRET` | Cadena aleatoria larga para firmar la sesión |
 | `MAX_DURATION` | Duración máxima por vídeo (4–30 s) |
-| `PRICE_DISCOUNT` | Descuento de tu cuenta en Higgsfield, en % (15 por defecto) |
+| `PRICE_DISCOUNT` | Descuento de tu cuenta en Higgsfield, en % (0 por defecto: precio de lista) |
 
 ## Publicar en Vercel
 
@@ -30,7 +30,7 @@ npm run dev                  # http://localhost:3000
 
 - Tokens = `ceil(alto × ancho × segundos × 24 / 1024)`
 - Precio de lista: $0.0214 por cada 1.000 tokens en 480p y 720p, $0.0234 en 1080p ($0.206/s en 480p 16:9).
-- Sobre eso se aplica `PRICE_DISCOUNT`: con un 15 % salen $0.175/s en 480p, igual que "Your current price" en la tabla de precios de Higgsfield.
+- Si tu cuenta tiene descuento, ponlo en `PRICE_DISCOUNT` y se aplica sobre el precio de lista.
 
 En 16:9 el precio es exacto. En otros formatos Higgsfield no publica las dimensiones, así que se muestra una estimación con "≈" y el coste real se recalcula con las dimensiones del vídeo al terminar.
 

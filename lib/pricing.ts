@@ -31,7 +31,7 @@ export function billableTokens(width: number, height: number, seconds: number): 
 }
 
 /** Descuento por defecto de la cuenta, en %. */
-export const DEFAULT_DISCOUNT = 15;
+export const DEFAULT_DISCOUNT = 0;
 
 /** Convierte un porcentaje de descuento en multiplicador (0–75 %). */
 export function discountFactor(percent: number): number {

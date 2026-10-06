@@ -494,7 +494,7 @@ export default function Studio({ maxDuration, discount }: { maxDuration: number;
 
       <footer className="foot">
         <p>
-          Seedance 2.5 vía Higgsfield, con un {discount}% de descuento sobre el precio de lista. Por segundo en 16:9:{" "}
+          Seedance 2.5 vía Higgsfield{discount > 0 ? `, con un ${discount}% de descuento` : ", precio de lista"}. Por segundo en 16:9:{" "}
           {formatUSD(perSecondUSD("480p", factor))} en 480p, {formatUSD(perSecondUSD("720p", factor))} en 720p y{" "}
           {formatUSD(perSecondUSD("1080p", factor))} en 1080p.
         </p>
