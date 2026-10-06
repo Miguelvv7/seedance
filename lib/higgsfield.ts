@@ -1,6 +1,7 @@
 import "server-only";
 
-const API_BASE = "https://api.higgsfield.ai";
+// HF_API_BASE solo se usa para pruebas locales contra un simulador.
+const API_BASE = process.env.HF_API_BASE || "https://api.higgsfield.ai";
 
 function credentials(): string {
   const value = process.env.HF_CREDENTIALS;
@@ -93,20 +94,77 @@ export async function getStatus(requestId: string): Promise<StatusResult> {
   };
 }
 
-/** Sube un archivo al CDN de Higgsfield y devuelve su URL pública. */
-export async function uploadFile(bytes: ArrayBuffer, contentType: string): Promise<string> {
-  const slot = await api<{ upload_url: string; public_url: string }>("/files/generate-upload-url", {
-    method: "POST",
-    body: JSON.stringify({ content_type: contentType }),
-  });
-  const put = await fetch(slot.upload_url, {
+/** Código de error del almacenamiento (S3/GCS devuelven XML con <Code>…</Code>). */
+async function storageError(res: Response): Promise<string> {
+  const body = await res.text().catch(() => "");
+  const code = /<Code>([^<]+)<\/Code>/i.exec(body)?.[1];
+  return `${res.status}${code ? ` ${code}` : ""}`;
+}
+
+/** PUT a un enlace firmado. Sin credenciales: romperían la firma. */
+async function putSigned(url: string, bytes: ArrayBuffer, contentType: string | null): Promise<Response> {
+  return fetch(url, {
     method: "PUT",
     body: bytes,
-    headers: { "Content-Type": contentType },
+    headers: contentType ? { "Content-Type": contentType } : {},
     signal: AbortSignal.timeout(30_000),
   });
-  if (!put.ok) throw new HiggsfieldHttpError(`La subida falló (${put.status})`, put.status);
-  return slot.public_url;
+}
+
+/**
+ * Sube un archivo al CDN de Higgsfield y devuelve su URL pública.
+ * Prueba, en orden: el enlace firmado clásico con el tipo que indique Higgsfield,
+ * el mismo enlace sin cabecera de tipo (causa típica de un 403 de firma) y,
+ * por último, la subida de medios con confirmación del SDK v2.
+ */
+export async function uploadFile(buffer: ArrayBuffer, contentType: string): Promise<string> {
+  const bytes = buffer;
+  const tried: string[] = [];
+
+  // 1 y 2: enlace firmado clásico.
+  try {
+    const slot = await api<{ upload_url: string; public_url: string; content_type?: string }>("/files/generate-upload-url", {
+      method: "POST",
+      body: JSON.stringify({ content_type: contentType }),
+    });
+    const signedType = slot.content_type ?? contentType;
+    let put = await putSigned(slot.upload_url, bytes, signedType);
+    if (put.ok) return slot.public_url;
+    tried.push(`enlace con tipo: ${await storageError(put)}`);
+    if (put.status === 403 || put.status === 400) {
+      put = await putSigned(slot.upload_url, bytes, null);
+      if (put.ok) return slot.public_url;
+      tried.push(`enlace sin tipo: ${await storageError(put)}`);
+    }
+  } catch (err) {
+    if (err instanceof HiggsfieldHttpError && err.status === 401) throw err;
+    tried.push(`enlace: ${err instanceof Error ? err.message : "error"}`);
+  }
+
+  // 3: subida de medios con confirmación.
+  try {
+    const ext = contentType.split("/")[1] === "png" ? "png" : contentType.split("/")[1] === "webp" ? "webp" : "jpeg";
+    const slot = await api<{ id: string; content_type: string; upload_url: string; url: string }>("/v1/agent/media", {
+      method: "POST",
+      body: JSON.stringify({ extension: ext, type: "image" }),
+    });
+    const put = await putSigned(slot.upload_url, bytes, slot.content_type);
+    if (!put.ok) {
+      tried.push(`medios: ${await storageError(put)}`);
+    } else {
+      const ok = await api<{ status: string }>(`/v1/agent/media/${encodeURIComponent(slot.id)}/confirm`, {
+        method: "POST",
+        body: JSON.stringify({ type: "image" }),
+      });
+      if (ok.status === "uploaded") return slot.url;
+      tried.push(`medios: sin confirmar (${ok.status})`);
+    }
+  } catch (err) {
+    tried.push(`medios: ${err instanceof Error ? err.message : "error"}`);
+  }
+
+  console.error("upload intentos:", tried.join(" | "));
+  throw new HiggsfieldHttpError(`La subida falló (${tried.join(" · ")})`, 502);
 }
 
 export interface SoulId {

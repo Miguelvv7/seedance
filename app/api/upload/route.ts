@@ -24,6 +24,8 @@ export async function POST(req: Request) {
   } catch (err) {
     const { message, status } = explain(err);
     console.error("upload:", status, message);
-    return NextResponse.json({ error: `No se pudo subir la foto. ${message}` }, { status });
+    // El detalle técnico ayuda a diagnosticar; la frase principal es para la persona.
+    const detail = err instanceof Error && /La subida falló/.test(err.message) ? ` Detalle: ${err.message}` : ` ${message}`;
+    return NextResponse.json({ error: `No se pudo subir la foto.${detail}` }, { status });
   }
 }
