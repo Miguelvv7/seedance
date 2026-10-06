@@ -140,7 +140,7 @@ function uid() {
 }
 function priceText(e: Estimate) {
   if (e.usd === null) return "Sin precio";
-  return `${e.basis === "exact" ? "" : e.basis === "from" ? "desde " : ""}${formatUSD(e.usd)}`;
+  return `${e.basis === "from" ? "desde " : e.basis === "atLeast" ? "más de " : ""}${formatUSD(e.usd)}`;
 }
 
 // =========================================================
@@ -506,7 +506,7 @@ export default function Studio({ maxDuration, discount }: { maxDuration: number;
                   "precio no publicado"
                 ) : (
                   <>
-                    {active.estimate.basis === "exact" ? "Coste " : "Coste desde "}
+                    {active.estimate.basis === "exact" ? "Coste " : active.estimate.basis === "atLeast" ? "Coste: más de " : "Coste desde "}
                     <b>{formatUSD(active.estimate.usd)}</b>
                   </>
                 )}
@@ -702,13 +702,15 @@ export default function Studio({ maxDuration, discount }: { maxDuration: number;
                   {price.usd === null ? "—" : (
                     <>
                       {price.basis === "from" && <small>desde </small>}
+                      {price.basis === "atLeast" && <small>más de </small>}
                       {formatUSD(price.usd)}
                     </>
                   )}
                 </span>
                 <span className="price-detail">
                   {price.basis === "exact" && `${price.detail} · precio exacto`}
-                  {price.basis === "from" && `${price.detail} · el precio final depende de los ajustes`}
+                  {price.basis === "from" && `${price.detail} · precio mínimo publicado`}
+                  {price.basis === "atLeast" && `Con estos ajustes cuesta más; Higgsfield no publica cuánto (${price.detail})`}
                   {price.basis === "unknown" && "Higgsfield no publica el precio de este modelo"}
                 </span>
               </div>

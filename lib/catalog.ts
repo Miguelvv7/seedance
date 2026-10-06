@@ -46,7 +46,7 @@ export type Field =
 
 export type Price =
   | { type: "seedance25" } // fórmula oficial por tokens
-  | { type: "perSecond"; usd: number; exact: false } // precio "desde" publicado
+  | { type: "perSecond"; usd: number; exact: false; floorOnly?: boolean } // precio "desde" publicado
   | { type: "perImage"; usd: number; exact: false }
   | { type: "unknown" };
 
@@ -93,6 +93,8 @@ const thinking: Field = { key: "enable_thinking", label: "Pensamiento profundo",
 const extend: Field = { key: "prompt_extend", label: "Mejorar descripción", type: "bool", default: false, advanced: true };
 
 const ps = (usd: number): Price => ({ type: "perSecond", usd, exact: false });
+/** Variante más cara de una familia: solo sabemos que cuesta más que el mínimo de la familia. */
+const psFloor = (usd: number): Price => ({ type: "perSecond", usd, exact: false, floorOnly: true });
 const pi = (usd: number): Price => ({ type: "perImage", usd, exact: false });
 
 // ---------- Vídeo ----------
@@ -253,7 +255,7 @@ export const WORKFLOWS: Workflow[] = [
     promptMax: 2500,
     fields: kling3Fields,
     durationKey: "duration",
-    price: ps(0.084),
+    price: psFloor(0.084),
     blurb: "Más detalle y estabilidad que Standard.",
     tags: ["Sonido"],
   },
@@ -267,7 +269,7 @@ export const WORKFLOWS: Workflow[] = [
     promptMax: 2500,
     fields: kling3Fields,
     durationKey: "duration",
-    price: ps(0.084),
+    price: psFloor(0.084),
     blurb: "La máxima resolución de Kling.",
     tags: ["4K", "Sonido"],
   },
@@ -308,7 +310,7 @@ export const WORKFLOWS: Workflow[] = [
     media: { image: { key: "image_url", required: true }, endImage: { key: "last_image_url", required: false } },
     fields: kling3I2V,
     durationKey: "duration",
-    price: ps(0.084),
+    price: psFloor(0.084),
     blurb: "Animación de foto con más detalle.",
     tags: ["Sonido"],
   },
@@ -322,7 +324,7 @@ export const WORKFLOWS: Workflow[] = [
     media: { image: { key: "image_url", required: true }, endImage: { key: "last_image_url", required: false } },
     fields: kling3I2V,
     durationKey: "duration",
-    price: ps(0.084),
+    price: psFloor(0.084),
     blurb: "Anima tu foto en 4K.",
     tags: ["4K", "Sonido"],
   },
@@ -350,7 +352,7 @@ export const WORKFLOWS: Workflow[] = [
     media: { image: { key: "image_url", required: true }, endImage: { key: "last_image_url", required: true } },
     fields: kling3I2V,
     durationKey: "duration",
-    price: ps(0.084),
+    price: psFloor(0.084),
     blurb: "Transición entre dos fotos con Kling 3.0.",
     tags: ["Sonido"],
   },
@@ -942,7 +944,9 @@ export function defaultsFor(w: Workflow): Record<string, unknown> {
 export interface Estimate {
   usd: number | null;
   /** exact: fórmula oficial; from: precio mínimo publicado; unknown: sin precio publicado. */
-  basis: "exact" | "from" | "unknown";
+  /** exact: fórmula oficial; from: precio mínimo publicado con los ajustes más baratos;
+   *  atLeast: con estos ajustes cuesta más que la cifra (Higgsfield no publica cuánto); unknown: sin precio. */
+  basis: "exact" | "from" | "atLeast" | "unknown";
   detail: string;
 }
 
@@ -983,13 +987,36 @@ export function estimate(w: Workflow, params: Record<string, unknown>, discountF
     };
   }
   if (w.price.type === "perSecond") {
-    return { usd: w.price.usd * seconds * discountFactor, basis: "from", detail: `desde $${w.price.usd}/s` };
+    const above = w.price.floorOnly || aboveCheapest(w, p);
+    return {
+      usd: w.price.usd * seconds * discountFactor,
+      basis: above ? "atLeast" : "from",
+      detail: above ? `mínimo publicado: $${w.price.usd}/s` : `$${w.price.usd}/s con los ajustes más baratos`,
+    };
   }
   if (w.price.type === "perImage") {
     const n = Number(p.batch_size ?? 1) || 1;
-    return { usd: w.price.usd * n * discountFactor, basis: "from", detail: `desde $${w.price.usd}/imagen` };
+    const above = aboveCheapest(w, p);
+    return {
+      usd: w.price.usd * n * discountFactor,
+      basis: above ? "atLeast" : "from",
+      detail: above ? `mínimo publicado: $${w.price.usd}/imagen` : `$${w.price.usd}/imagen con los ajustes más baratos`,
+    };
   }
   return { usd: null, basis: "unknown", detail: "Higgsfield no publica este precio" };
+}
+
+/** Ajustes que encarecen el vídeo o la imagen. La primera opción de cada uno es la más barata. */
+const PRICE_KEYS = ["resolution", "mode", "quality", "rendering_speed"];
+const CHEAPEST: Record<string, string> = { rendering_speed: "TURBO" };
+
+/** ¿Algún ajuste de precio está por encima del más barato? */
+function aboveCheapest(w: Workflow, p: Record<string, unknown>): boolean {
+  return w.fields.some((f) => {
+    if (f.type !== "enum" || !PRICE_KEYS.includes(f.key)) return false;
+    const cheapest = CHEAPEST[f.key] ?? String(f.options[0]);
+    return p[f.key] !== undefined && String(p[f.key]) !== cheapest;
+  });
 }
 
 /** Para mostrar el formato de la pantalla. */
