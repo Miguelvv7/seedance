@@ -124,7 +124,9 @@ function signedHeadersOf(url: string): string[] {
  */
 function headerVariants(signed: string[], requested: string, fromSlot?: string): Record<string, string>[] {
   const types = [...new Set([fromSlot, requested, "application/octet-stream", "binary/octet-stream"].filter(Boolean) as string[])];
-  const acl = signed.includes("x-amz-acl") ? [{ "x-amz-acl": "public-read" }, { "x-amz-acl": "private" }] : [{}];
+  // Valor documentado por Higgsfield para la etiqueta de los archivos subidos.
+  const tagging: Record<string, string> = signed.includes("x-amz-tagging") ? { "x-amz-tagging": "retention=temporary" } : {};
+  const acl: Record<string, string>[] = (signed.includes("x-amz-acl") ? [{ "x-amz-acl": "public-read" }, { "x-amz-acl": "private" }] : [{}]).map((a: Record<string, string>) => ({ ...a, ...tagging }));
   const out: Record<string, string>[] = [];
   const withType = signed.length === 0 || signed.includes("content-type");
   for (const a of acl) {
@@ -143,13 +145,14 @@ export async function uploadFile(buffer: ArrayBuffer, contentType: string): Prom
   const tried: string[] = [];
 
   try {
-    const slot = await api<{ upload_url: string; public_url: string; content_type?: string; headers?: Record<string, string> }>(
+    const slot = await api<{ upload_url: string; public_url: string; content_type?: string; upload_headers?: Record<string, string> }>(
       "/files/generate-upload-url",
       { method: "POST", body: JSON.stringify({ content_type: contentType }) },
     );
-    // Si Higgsfield indica cabeceras exactas, van primero.
-    if (slot.headers && typeof slot.headers === "object") {
-      const put = await putSigned(slot.upload_url, buffer, slot.headers);
+    // Documentado por Higgsfield: hay que reenviar tal cual todas las cabeceras de upload_headers
+    // (hoy Content-Type y x-amz-tagging), porque el enlace está firmado sobre ellas.
+    if (slot.upload_headers && typeof slot.upload_headers === "object") {
+      const put = await putSigned(slot.upload_url, buffer, slot.upload_headers);
       if (put.ok) return slot.public_url;
       tried.push(`cabeceras de Higgsfield: ${await storageError(put)}`);
     }
