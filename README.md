@@ -28,6 +28,7 @@ npm run dev                  # http://localhost:3000
 | `SESSION_SECRET` | Cadena aleatoria larga para firmar la sesión |
 | `MAX_DURATION` | Duración máxima por vídeo (4–30 s) para controlar el gasto |
 | `PRICE_DISCOUNT` | Descuento de tu cuenta en Higgsfield, en % (0 por defecto) |
+| `MAX_PER_HOUR` | Generaciones máximas por persona y hora (30 por defecto) |
 
 ## Publicar
 
@@ -44,3 +45,11 @@ npm run dev                  # http://localhost:3000
 ## Errores
 
 La web llama a la API directamente (`lib/higgsfield.ts`) y muestra el motivo real que devuelve Higgsfield. El SDK oficial traduce cualquier 403 como "sin créditos", lo que confunde otros errores.
+
+## Protección
+
+- Acceso con código: tras 8 códigos incorrectos en 15 minutos, esa conexión queda bloqueada un rato.
+- Freno de gasto: `MAX_PER_HOUR` generaciones por persona y hora. Las peticiones rechazadas no cuentan. También hay un límite para subir fotos (120/h) y para entrenar personajes (5/h).
+- Los límites viven en la memoria de cada instancia del servidor: frenan abusos y clics repetidos, pero no son un tope global exacto.
+- El servidor valida cada petición contra el catálogo antes de enviarla a Higgsfield: solo pasan parámetros y valores permitidos.
+- Cabeceras de seguridad (sin iframes, sin rastreo de referencias, HSTS).

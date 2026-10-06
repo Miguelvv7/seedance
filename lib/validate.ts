@@ -36,7 +36,7 @@ export function buildInput(body: GenerateRequest, maxDuration: number, discountF
   if (prompt.length > max) return { error: `La descripción admite hasta ${max} caracteres` };
   if (prompt) input.prompt = prompt;
 
-  const params = body.params ?? {};
+  const params = body.params && typeof body.params === "object" && !Array.isArray(body.params) ? body.params : {};
   for (const f of w.fields) {
     let v = params[f.key];
     if (v === undefined || v === null || v === "") {
@@ -96,13 +96,14 @@ export function buildInput(body: GenerateRequest, maxDuration: number, discountF
   }
   if (m?.images) {
     const list = Array.isArray(body.images) ? body.images.filter(isUrl) : [];
+    if (Array.isArray(body.images) && list.length !== body.images.length) return { error: "Alguna foto no es válida; vuelve a subirla" };
     if (list.length > m.images.max) return { error: `Máximo ${m.images.max} fotos` };
     if (m.images.required && list.length < (m.images.min ?? 1)) return { error: "Añade al menos una foto o personaje" };
     if (list.length) input[m.images.key] = list;
   }
 
-  if (body.soulId) {
-    if (!SOUL_REFERENCE_MODELS.has(w.id) || !UUID_RE.test(body.soulId)) return { error: "Este modelo no admite personajes Soul ID" };
+  if (body.soulId !== undefined && body.soulId !== null && body.soulId !== "") {
+    if (!SOUL_REFERENCE_MODELS.has(w.id) || typeof body.soulId !== "string" || !UUID_RE.test(body.soulId)) return { error: "Este modelo no admite personajes Soul ID" };
     input.custom_reference_id = body.soulId;
   }
 

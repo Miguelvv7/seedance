@@ -44,6 +44,7 @@ async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
     ...init,
     headers: { Accept: "application/json", "Content-Type": "application/json", ...authHeaders(), ...(init.headers ?? {}) },
     cache: "no-store",
+    signal: init.signal ?? AbortSignal.timeout(20_000),
   });
   if (!res.ok) {
     const detail = detailOf(await res.text().catch(() => ""));
@@ -59,6 +60,8 @@ export async function submit(endpoint: string, input: Record<string, unknown>): 
 
 /** Traduce un error de Higgsfield a un mensaje claro para la web. */
 export function explain(err: unknown): { message: string; status: number } {
+  if (err instanceof Error && (err.name === "TimeoutError" || err.name === "AbortError"))
+    return { message: "Higgsfield tardó demasiado en responder. Inténtalo de nuevo.", status: 504 };
   if (!(err instanceof HiggsfieldHttpError)) return { message: "No se pudo conectar con Higgsfield.", status: 502 };
   const d = err.message;
   if (/allowlist|egress/i.test(d)) return { message: "El servidor no tiene salida a internet hacia Higgsfield.", status: 502 };
@@ -67,6 +70,7 @@ export function explain(err: unknown): { message: string; status: number } {
     return { message: "No quedan créditos en la cuenta de Higgsfield.", status: 402 };
   if (err.status === 400 || err.status === 422) return { message: `Higgsfield rechazó los parámetros: ${d}`, status: 400 };
   if (err.status === 403) return { message: `Higgsfield denegó la petición: ${d}`, status: 403 };
+  if (err.status === 429) return { message: "Higgsfield está recibiendo demasiadas peticiones. Espera un momento.", status: 429 };
   return { message: `Higgsfield respondió ${err.status}: ${d}`, status: 502 };
 }
 
@@ -95,7 +99,12 @@ export async function uploadFile(bytes: ArrayBuffer, contentType: string): Promi
     method: "POST",
     body: JSON.stringify({ content_type: contentType }),
   });
-  const put = await fetch(slot.upload_url, { method: "PUT", body: bytes, headers: { "Content-Type": contentType } });
+  const put = await fetch(slot.upload_url, {
+    method: "PUT",
+    body: bytes,
+    headers: { "Content-Type": contentType },
+    signal: AbortSignal.timeout(30_000),
+  });
   if (!put.ok) throw new HiggsfieldHttpError(`La subida falló (${put.status})`, put.status);
   return slot.public_url;
 }

@@ -946,7 +946,7 @@ export interface Estimate {
   /** exact: fórmula oficial; from: precio mínimo publicado; unknown: sin precio publicado. */
   /** exact: fórmula oficial; from: precio mínimo publicado con los ajustes más baratos;
    *  atLeast: con estos ajustes cuesta más que la cifra (Higgsfield no publica cuánto); unknown: sin precio. */
-  basis: "exact" | "from" | "atLeast" | "unknown";
+  basis: "exact" | "approx" | "from" | "atLeast" | "unknown";
   detail: string;
 }
 
@@ -982,8 +982,10 @@ export function estimate(w: Workflow, params: Record<string, unknown>, discountF
     const usd = (tokens / 1000) * base.rate * discountFactor;
     return {
       usd,
-      basis: exact ? "exact" : "from",
-      detail: `${tokens.toLocaleString("es-ES")} tokens`,
+      basis: exact ? "exact" : "approx",
+      detail: exact
+        ? `${tokens.toLocaleString("es-ES")} tokens`
+        : `≈ ${tokens.toLocaleString("es-ES")} tokens; varía un poco según el formato${w.fields.some((f) => f.key === "aspect_ratio") ? "" : " de tu foto"}`,
     };
   }
   if (w.price.type === "perSecond") {
@@ -1017,6 +1019,15 @@ function aboveCheapest(w: Workflow, p: Record<string, unknown>): boolean {
     const cheapest = CHEAPEST[f.key] ?? String(f.options[0]);
     return p[f.key] !== undefined && String(p[f.key]) !== cheapest;
   });
+}
+
+/** Un modelo no se puede usar si todas sus duraciones superan el límite de la web. */
+export function fitsDuration(w: Workflow, maxDuration: number): boolean {
+  const f = w.fields.find((x) => x.key === w.durationKey);
+  if (!f) return true;
+  if (f.type === "enum") return f.options.some((o) => Number(o) <= maxDuration);
+  if (f.type === "int") return f.min <= maxDuration;
+  return true;
 }
 
 /** Para mostrar el formato de la pantalla. */

@@ -366,9 +366,10 @@ button:disabled {
   justify-items: center;
 }
 
+/* Formatos cuadrados o verticales: el alto manda, pero el ancho nunca supera la pantalla */
 .stage-frame.tall .stage {
-  width: auto;
-  height: min(72vh, 720px);
+  height: auto;
+  width: min(100%, calc(min(72vh, 720px) * var(--r, 1)));
 }
 
 .stage {
@@ -529,6 +530,8 @@ button:disabled {
 }
 
 .pill-btn {
+  display: inline-block;
+  text-decoration: none;
   margin-top: 20px;
   appearance: none;
   border: 0;
@@ -1231,7 +1234,8 @@ input[type="range"]:active::-webkit-slider-thumb {
     justify-content: center;
   }
   .stage-frame.tall .stage {
-    height: min(64vh, 600px);
+    height: auto;
+    width: min(100%, calc(min(64vh, 600px) * var(--r, 1)));
   }
   .stage {
     max-height: 64vh;
@@ -2380,5 +2384,48 @@ input[type="range"]:active::-webkit-slider-thumb {
   }
   .num {
     width: 100%;
+  }
+}
+
+
+/* ---------- Ajustes de QA ---------- */
+.setting-label.over,
+.setting-label.over b {
+  color: var(--danger);
+}
+
+.prompt-count {
+  margin: 0 18px;
+  font-size: 12.5px;
+  color: var(--ink-3);
+  font-variant-numeric: tabular-nums;
+}
+
+.prompt-count.over {
+  color: var(--danger);
+}
+
+.link-btn.small.inline {
+  display: inline;
+  padding: 0;
+  font-size: inherit;
+}
+
+.picker-item:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.foot p {
+  color: var(--ink-2);
+}
+
+/* iOS hace zoom en campos con letra menor de 16 px */
+@media (max-width: 600px) {
+  .text,
+  .num,
+  .select select,
+  .field {
+    font-size: 16px;
   }
 }

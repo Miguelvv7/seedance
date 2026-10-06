@@ -2,11 +2,24 @@
 
 const MAX_SIDE = 2048;
 
+/** AbortSignal.timeout no existe en iOS anteriores a 16. */
+function timeout(ms: number): AbortSignal | undefined {
+  if (typeof AbortSignal !== "undefined" && "timeout" in AbortSignal) return AbortSignal.timeout(ms);
+  if (typeof AbortController === "undefined") return undefined;
+  const c = new AbortController();
+  setTimeout(() => c.abort(), ms);
+  return c.signal;
+}
+
 /** Reduce la foto en el navegador (máx. 2048 px, JPEG) para subirla rápido y sin pasar del límite. */
 async function compress(file: File): Promise<Blob> {
-  if (!file.type.startsWith("image/")) throw new Error("Eso no es una foto");
+  if (file.size > 40 * 1024 * 1024) throw new Error("La foto pesa más de 40 MB");
   const bitmap = await createImageBitmap(file).catch(() => null);
-  if (!bitmap) throw new Error("No se pudo leer la foto. Prueba con JPG o PNG.");
+  if (!bitmap) {
+    if (/\.(heic|heif)$/i.test(file.name) || /hei[cf]/i.test(file.type))
+      throw new Error("Este navegador no abre fotos HEIC. Expórtala como JPG o súbela desde el iPhone con Safari.");
+    throw new Error("No se pudo leer la foto. Prueba con JPG o PNG.");
+  }
   const scale = Math.min(1, MAX_SIDE / Math.max(bitmap.width, bitmap.height));
   const w = Math.round(bitmap.width * scale);
   const h = Math.round(bitmap.height * scale);
@@ -15,6 +28,9 @@ async function compress(file: File): Promise<Blob> {
   canvas.height = h;
   const ctx = canvas.getContext("2d");
   if (!ctx) throw new Error("Tu navegador no puede procesar la foto");
+  // Fondo blanco: un PNG transparente no debe salir con el fondo negro al pasar a JPG.
+  ctx.fillStyle = "#ffffff";
+  ctx.fillRect(0, 0, w, h);
   ctx.drawImage(bitmap, 0, 0, w, h);
   bitmap.close?.();
   const blob = await new Promise<Blob | null>((r) => canvas.toBlob(r, "image/jpeg", 0.9));
@@ -27,7 +43,7 @@ export async function uploadPhoto(file: File): Promise<string> {
   const blob = await compress(file);
   const form = new FormData();
   form.append("file", blob, "foto.jpg");
-  const res = await fetch("/api/upload", { method: "POST", body: form }).catch(() => null);
+  const res = await fetch("/api/upload", { method: "POST", body: form, signal: timeout(60_000) }).catch(() => null);
   if (!res) throw new Error("Sin conexión. Revisa tu red.");
   if (res.status === 401) {
     window.location.href = "/acceso";

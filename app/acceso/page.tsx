@@ -22,7 +22,9 @@ export default function Acceso() {
       return;
     }
     setBusy(false);
-    setError(res ? "Ese código no es correcto. Pídeselo de nuevo a quien te pasó el enlace." : "Sin conexión. Revisa tu red e inténtalo otra vez.");
+    if (!res) return setError("Sin conexión. Revisa tu red e inténtalo otra vez.");
+    const data = (await res.json().catch(() => ({}))) as { error?: string };
+    setError(res.status === 401 ? "Ese código no es correcto. Pídeselo de nuevo a quien te pasó el enlace." : data.error ?? "No se pudo entrar. Inténtalo otra vez.");
   }
 
   return (

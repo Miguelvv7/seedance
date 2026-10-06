@@ -3,7 +3,7 @@ import { SESSION_COOKIE, accessEnabled, isValidSession } from "./lib/auth";
 
 export async function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl;
-  if (pathname === "/acceso" || pathname === "/api/login") return NextResponse.next();
+  if (pathname === "/api/login") return NextResponse.next();
 
   // Sin código configurado no se abre la puerta: la web gastaría tus créditos.
   if (!accessEnabled()) {
@@ -11,6 +11,17 @@ export async function middleware(req: NextRequest) {
   }
 
   const ok = await isValidSession(req.cookies.get(SESSION_COOKIE)?.value);
+
+  if (pathname === "/acceso") {
+    // Si ya tiene sesión, directo al estudio.
+    if (ok) {
+      const url = req.nextUrl.clone();
+      url.pathname = "/";
+      return NextResponse.redirect(url);
+    }
+    return NextResponse.next();
+  }
+
   if (ok) return NextResponse.next();
 
   if (pathname.startsWith("/api/")) {

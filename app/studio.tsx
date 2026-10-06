@@ -11,6 +11,7 @@ import {
   defaultsFor,
   estimate,
   findWorkflow,
+  fitsDuration,
   workflowsFor,
   type Estimate,
   type Kind,
@@ -140,7 +141,8 @@ function uid() {
 }
 function priceText(e: Estimate) {
   if (e.usd === null) return "Sin precio";
-  return `${e.basis === "from" ? "desde " : e.basis === "atLeast" ? "más de " : ""}${formatUSD(e.usd)}`;
+  const pre = { exact: "", approx: "≈ ", from: "desde ", atLeast: "más de ", unknown: "" }[e.basis] ?? "";
+  return `${pre}${formatUSD(e.usd)}`;
 }
 
 // =========================================================
@@ -196,7 +198,16 @@ export default function Studio({ maxDuration, discount }: { maxDuration: number;
       setKind(prefs.kind);
       setMode(prefs.mode);
     }
-    const t = load<string | null>(THEME_KEY, null);
+    let t: string | null = null;
+    try {
+      t = localStorage.getItem(THEME_KEY);
+      // Versiones anteriores lo guardaban con comillas: se corrige al vuelo.
+      if (t === '"light"' || t === '"dark"') {
+        t = t.replace(/"/g, "");
+        localStorage.setItem(THEME_KEY, t);
+        document.documentElement.dataset.theme = t;
+      }
+    } catch {}
     if (t === "light" || t === "dark") setTheme(t);
     setHydrated(true);
   }, []);
@@ -221,17 +232,26 @@ export default function Studio({ maxDuration, discount }: { maxDuration: number;
       } catch {}
     } else {
       root.dataset.theme = next;
-      save(THEME_KEY, next);
+      try {
+        localStorage.setItem(THEME_KEY, next);
+      } catch {}
     }
   }
 
   // ---------- Modelo actual ----------
-  const workflow: Workflow = findWorkflow(modelByMode[mode]) ?? workflowsFor(mode)[0];
+  const usable = workflowsFor(mode).filter((w) => fitsDuration(w, maxDuration));
+  const chosen = findWorkflow(modelByMode[mode]);
+  const workflow: Workflow = chosen && chosen.mode === mode && fitsDuration(chosen, maxDuration) ? chosen : usable[0] ?? workflowsFor(mode)[0];
   const params = useMemo(() => {
     const p = { ...defaultsFor(workflow), ...(paramsByModel[workflow.id] ?? {}) };
     if (workflow.durationKey && typeof p[workflow.durationKey] === "number") {
       const f = workflow.fields.find((x) => x.key === workflow.durationKey);
-      if (f && f.type === "int") p[workflow.durationKey] = Math.min(p[workflow.durationKey] as number, maxDuration);
+      const v = p[workflow.durationKey] as number;
+      if (f && f.type === "int") p[workflow.durationKey] = Math.max(f.min, Math.min(v, maxDuration));
+      if (f && f.type === "enum" && v > maxDuration) {
+        const ok = f.options.map(Number).filter((o) => o <= maxDuration);
+        if (ok.length) p[workflow.durationKey] = Math.max(...ok);
+      }
     }
     return p;
   }, [workflow, paramsByModel, maxDuration]);
@@ -259,8 +279,15 @@ export default function Studio({ maxDuration, discount }: { maxDuration: number;
 
   // ---------- Fotos ----------
   async function handleFiles(files: FileList | File[], target: "start" | "end" | "refs") {
-    const list = Array.from(files).filter((f) => f.type.startsWith("image/"));
-    if (!list.length) return;
+    if (uploading) {
+      setFormError("Espera a que termine la subida en curso.");
+      return;
+    }
+    const list = Array.from(files).filter((f) => f.type.startsWith("image/") || /\.(heic|heif)$/i.test(f.name));
+    if (!list.length) {
+      setFormError("Eso no es una foto. Usa JPG, PNG o WebP.");
+      return;
+    }
     setFormError(null);
     const max = workflow.media?.images?.max ?? 9;
     const room = target === "refs" ? Math.max(0, max - refs.length) : 1;
@@ -277,6 +304,7 @@ export default function Studio({ maxDuration, discount }: { maxDuration: number;
         else if (target === "end") setEnd({ url });
         else setRefs((prev) => [...prev, { url }]);
       }
+      if (target === "refs" && list.length > batch.length) setFormError(`Solo caben ${max} referencias en este modelo: se han subido ${batch.length}.`);
     } catch (err) {
       setFormError(err instanceof Error ? err.message : "No se pudo subir la foto");
     } finally {
@@ -298,7 +326,8 @@ export default function Studio({ maxDuration, discount }: { maxDuration: number;
     setKind(target === "edit" ? "image" : "video");
     setMode(target);
     if (target === "i2v") setStart({ url });
-    else setRefs((prev) => (prev.some((r) => r.url === url) ? prev : [...prev, { url }]));
+    if (target === "edit") setStart({ url });
+    if (target !== "i2v") setRefs((prev) => (prev.some((r) => r.url === url) ? prev : [...prev, { url }]));
     setActiveId(null);
     composerRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
   }
@@ -314,6 +343,9 @@ export default function Studio({ maxDuration, discount }: { maxDuration: number;
     let stop = false;
     const tick = async () => {
       const pending = takesRef.current.filter((t) => PENDING.includes(t.status));
+      for (const t of pending)
+        if (Date.now() - t.createdAt > 90 * 60 * 1000)
+          updateTake(t.id, { status: "error", message: "Lleva más de hora y media sin terminar. Revisa el panel de Higgsfield o vuelve a generarlo." });
       await Promise.all(
         pending.map(async (t) => {
           const res = await fetch(`/api/status/${encodeURIComponent(t.id)}`, { cache: "no-store" }).catch(() => null);
@@ -354,13 +386,20 @@ export default function Studio({ maxDuration, discount }: { maxDuration: number;
   const soulPending = characters.some((c) => c.soul && !["completed", "failed"].includes(c.soul.status));
   useEffect(() => {
     if (!soulPending) return;
+    const misses = new Map<string, number>();
     const tick = async () => {
       for (const c of charsRef.current) {
         if (!c.soul || ["completed", "failed"].includes(c.soul.status)) continue;
         const res = await fetch(`/api/soul/${c.soul.id}`, { cache: "no-store" }).catch(() => null);
         const data = (await res?.json().catch(() => null)) as { status?: string } | null;
-        if (data?.status && data.status !== "unknown")
-          setCharacters((prev) => prev.map((x) => (x.id === c.id && x.soul ? { ...x, soul: { ...x.soul, status: data.status! } } : x)));
+        let status = data?.status;
+        if (!status || status === "unknown") {
+          const n = (misses.get(c.id) ?? 0) + 1;
+          misses.set(c.id, n);
+          if (n < 30) continue;
+          status = "failed"; // ~4 min sin respuesta: se da por fallido
+        }
+        setCharacters((prev) => prev.map((x) => (x.id === c.id && x.soul ? { ...x, soul: { ...x.soul, status: status! } } : x)));
       }
     };
     tick();
@@ -374,7 +413,12 @@ export default function Studio({ maxDuration, discount }: { maxDuration: number;
     (media?.image?.required && !start) ||
     (media?.endImage?.required && !end) ||
     (media?.images?.required && refs.length < (media.images.min ?? 1));
-  const canSubmit = !submitting && !uploading && !missingMedia && (!workflow.promptRequired || prompt.trim().length > 0);
+  const refMax = media?.images?.max ?? 0;
+  const overRefs = Boolean(media?.images) && refs.length > refMax;
+  const promptMax = workflow.promptMax ?? 2000;
+  const overPrompt = prompt.trim().length > promptMax;
+  const canSubmit =
+    !submitting && !uploading && !missingMedia && !overRefs && !overPrompt && (!workflow.promptRequired || prompt.trim().length > 0);
   const soulAllowed = SOUL_REFERENCE_MODELS.has(workflow.id);
   const soulReady = characters.filter((c) => c.soul?.status === "completed");
 
@@ -483,7 +527,7 @@ export default function Studio({ maxDuration, discount }: { maxDuration: number;
         <section className="theater" aria-label="Resultado">
           <div className={`stage-frame ${ratio(stageAspect) <= 1 ? "tall" : ""}`} ref={stageRef}>
             <div className="stage-glow" aria-hidden="true" />
-            <div className="stage" style={{ aspectRatio: String(ratio(stageAspect)) }}>
+            <div className="stage" style={{ aspectRatio: String(ratio(stageAspect)), ["--r" as string]: String(ratio(stageAspect)) }}>
               <StageContent
                 take={active}
                 now={now}
@@ -501,12 +545,28 @@ export default function Studio({ maxDuration, discount }: { maxDuration: number;
             <div className="caption">
               <p className="caption-prompt">{active.prompt}</p>
               <p className="caption-cost">
-                {active.modelName} ·{" "}
+                <button
+                  type="button"
+                  className="link-btn small inline"
+                  onClick={() => {
+                    setTakes((p) => p.filter((t) => t.id !== active.id));
+                    setActiveId(null);
+                  }}
+                >
+                  Quitar del historial
+                </button>{" "}
+                · {active.modelName} ·{" "}
                 {active.estimate.usd === null ? (
                   "precio no publicado"
                 ) : (
                   <>
-                    {active.estimate.basis === "exact" ? "Coste " : active.estimate.basis === "atLeast" ? "Coste: más de " : "Coste desde "}
+                    {active.estimate.basis === "exact"
+                      ? "Coste "
+                      : active.estimate.basis === "approx"
+                        ? "Coste ≈ "
+                        : active.estimate.basis === "atLeast"
+                          ? "Coste: más de "
+                          : "Coste desde "}
                     <b>{formatUSD(active.estimate.usd)}</b>
                   </>
                 )}
@@ -526,9 +586,9 @@ export default function Studio({ maxDuration, discount }: { maxDuration: number;
                 </button>
               ))}
             </div>
-            <div className="modes" role="tablist" aria-label="Modo">
+            <div className="modes" role="radiogroup" aria-label="Modo">
               {KIND_MODES[kind].map((m) => (
-                <button key={m} type="button" role="tab" aria-selected={mode === m} className={`mode ${mode === m ? "on" : ""}`} onClick={() => chooseMode(m)}>
+                <button key={m} type="button" role="radio" aria-checked={mode === m} className={`mode ${mode === m ? "on" : ""}`} onClick={() => chooseMode(m)}>
                   {MODE_LABEL[m]}
                 </button>
               ))}
@@ -582,7 +642,7 @@ export default function Studio({ maxDuration, discount }: { maxDuration: number;
           {media?.images && (
             <div className="refs">
               <div className="refs-head">
-                <span className="setting-label">
+                <span className={`setting-label ${overRefs ? "over" : ""}`}>
                   {kind === "video" ? "Referencias y personajes" : "Tus fotos"}{" "}
                   <b>
                     {refs.length}/{media.images.max}
@@ -607,7 +667,7 @@ export default function Studio({ maxDuration, discount }: { maxDuration: number;
                     <label className={`ref-add ${uploading === "refs" ? "busy" : ""}`}>
                       <input
                         type="file"
-                        accept="image/jpeg,image/png,image/webp"
+                        accept="image/*"
                         multiple
                         className="sr-only"
                         onChange={(e) => {
@@ -642,7 +702,8 @@ export default function Studio({ maxDuration, discount }: { maxDuration: number;
             id="prompt"
             className="prompt"
             rows={3}
-            maxLength={workflow.promptMax ?? 2000}
+            aria-describedby="prompt-count"
+            aria-invalid={overPrompt}
             placeholder={workflow.promptRequired ? "Describe lo que quieres ver…" : "Describe el movimiento (opcional)…"}
             value={prompt}
             onChange={(e) => setPrompt(e.target.value)}
@@ -650,6 +711,12 @@ export default function Studio({ maxDuration, discount }: { maxDuration: number;
               if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) generate();
             }}
           />
+          {prompt.length > promptMax * 0.8 && (
+            <p id="prompt-count" className={`prompt-count ${overPrompt ? "over" : ""}`}>
+              {prompt.trim().length}/{promptMax}
+              {overPrompt && ` · ${workflow.name} admite hasta ${promptMax} caracteres`}
+            </p>
+          )}
           {!prompt && (
             <div className="ideas" aria-label="Ideas">
               {IDEAS[kind].map((idea) => (
@@ -701,6 +768,7 @@ export default function Studio({ maxDuration, discount }: { maxDuration: number;
                 <span className="price-value">
                   {price.usd === null ? "—" : (
                     <>
+                      {price.basis === "approx" && <small>≈ </small>}
                       {price.basis === "from" && <small>desde </small>}
                       {price.basis === "atLeast" && <small>más de </small>}
                       {formatUSD(price.usd)}
@@ -709,6 +777,7 @@ export default function Studio({ maxDuration, discount }: { maxDuration: number;
                 </span>
                 <span className="price-detail">
                   {price.basis === "exact" && `${price.detail} · precio exacto`}
+                  {price.basis === "approx" && price.detail}
                   {price.basis === "from" && `${price.detail} · precio mínimo publicado`}
                   {price.basis === "atLeast" && `Con estos ajustes cuesta más; Higgsfield no publica cuánto (${price.detail})`}
                   {price.basis === "unknown" && "Higgsfield no publica el precio de este modelo"}
@@ -725,7 +794,12 @@ export default function Studio({ maxDuration, discount }: { maxDuration: number;
               {formError}
             </p>
           )}
-          {!formError && missingMedia && (
+          {!formError && overRefs && (
+            <p className="form-error" role="alert">
+              {workflow.name} admite como máximo {refMax} referencias. Quita {refs.length - refMax} para continuar.
+            </p>
+          )}
+          {!formError && !overRefs && missingMedia && (
             <p className="form-note">{media?.images ? "Añade al menos una foto o personaje." : "Sube la foto para continuar."}</p>
           )}
         </form>
@@ -837,9 +911,9 @@ export default function Studio({ maxDuration, discount }: { maxDuration: number;
                     >
                       <span className={`card-thumb s-${t.status}`}>
                         {t.status === "completed" && t.videoUrl ? (
-                          <video src={t.videoUrl} muted playsInline preload="metadata" />
+                          <video src={`${t.videoUrl}#t=0.1`} muted playsInline preload="metadata" onError={(e) => (e.currentTarget.style.display = "none")} />
                         ) : t.status === "completed" && t.images[0] ? (
-                          <img src={t.images[0]} alt="" />
+                          <img src={t.images[0]} alt="" loading="lazy" onError={(e) => (e.currentTarget.style.display = "none")} />
                         ) : (
                           <span className="card-state">{STATUS_COPY[t.status]}</span>
                         )}
@@ -868,7 +942,17 @@ export default function Studio({ maxDuration, discount }: { maxDuration: number;
         </p>
       </footer>
 
-      {pickerOpen && <ModelPicker mode={mode} current={workflow.id} params={params} factor={factor} onPick={chooseModel} onClose={() => setPickerOpen(false)} />}
+      {pickerOpen && (
+        <ModelPicker
+          mode={mode}
+          current={workflow.id}
+          params={params}
+          factor={factor}
+          maxDuration={maxDuration}
+          onPick={chooseModel}
+          onClose={() => setPickerOpen(false)}
+        />
+      )}
 
       {charPickerOpen && (
         <Sheet title="Añadir personaje" onClose={() => setCharPickerOpen(false)}>
@@ -942,6 +1026,26 @@ function StageContent({
   onUse: (url: string, target: "i2v" | "ref" | "edit") => void;
   onCharacter: (url: string) => void;
 }) {
+  const [broken, setBroken] = useState<string | null>(null);
+  if (take && broken === take.id) {
+    const url = take.videoUrl ?? take.images[0] ?? null;
+    return (
+      <div className="scene" role="alert">
+        <div className="scene-copy">
+          <p className="scene-title">{take.videoUrl ? "No se puede reproducir aquí" : "No se puede mostrar la imagen"}</p>
+          <p className="scene-sub">
+            Puede que el archivo haya caducado (Higgsfield borra los resultados pasado un tiempo)
+            {take.videoUrl ? " o que este navegador no admita el formato del vídeo" : ""}. Prueba a abrirlo directamente.
+          </p>
+          {url && (
+            <a className="pill-btn" href={url} target="_blank" rel="noopener noreferrer">
+              Abrir el archivo
+            </a>
+          )}
+        </div>
+      </div>
+    );
+  }
   if (!take) {
     return (
       <div className="scene">
@@ -981,7 +1085,16 @@ function StageContent({
   if (take.status === "completed" && take.videoUrl) {
     return (
       <>
-        <video key={take.id} className="stage-video" src={take.videoUrl} controls autoPlay loop playsInline />
+        <video
+          key={take.id}
+          className="stage-video"
+          src={take.videoUrl}
+          controls
+          autoPlay
+          loop
+          playsInline
+          onError={() => setBroken(take.id)}
+        />
         <a className="download glass" href={take.videoUrl} target="_blank" rel="noopener noreferrer" download>
           <IconDownload />
           Descargar
@@ -994,7 +1107,7 @@ function StageContent({
       <div className={`gallery n${Math.min(take.images.length, 4)}`}>
         {take.images.map((url) => (
           <figure key={url} className="gallery-item">
-            <img src={url} alt={take.prompt} />
+            <img src={url} alt={take.prompt} onError={() => setBroken(take.id)} />
             <div className="gallery-actions">
               <button type="button" className="glass-pill" onClick={() => onUse(url, "i2v")}>
                 <IconFilm /> Animar
@@ -1080,7 +1193,7 @@ function DropSlot({
       >
         <input
           type="file"
-          accept="image/jpeg,image/png,image/webp"
+          accept="image/*"
           className="sr-only"
           onChange={(e) => {
             if (e.target.files) onFiles(e.target.files);
@@ -1117,19 +1230,48 @@ function DropSlot({
 
 // ---------- Hoja modal ----------
 function Sheet({ title, onClose, children, wide }: { title: string; onClose: () => void; children: React.ReactNode; wide?: boolean }) {
+  const closeRef = useRef(onClose);
+  closeRef.current = onClose;
+  const panelRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
+    const opener = document.activeElement as HTMLElement | null;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") closeRef.current();
+      // Mantener el foco del teclado dentro de la hoja.
+      if (e.key === "Tab" && panelRef.current) {
+        const items = panelRef.current.querySelectorAll<HTMLElement>("button:not([disabled]), input, select, textarea, a[href]");
+        if (!items.length) return;
+        const first = items[0];
+        const last = items[items.length - 1];
+        if (e.shiftKey && document.activeElement === first) {
+          e.preventDefault();
+          last.focus();
+        } else if (!e.shiftKey && document.activeElement === last) {
+          e.preventDefault();
+          first.focus();
+        }
+      }
+    };
     window.addEventListener("keydown", onKey);
     const prev = document.body.style.overflow;
     document.body.style.overflow = "hidden";
+    panelRef.current?.querySelector<HTMLElement>(".sheet-body button, .sheet-body input")?.focus();
     return () => {
       window.removeEventListener("keydown", onKey);
       document.body.style.overflow = prev;
+      opener?.focus?.();
     };
-  }, [onClose]);
+  }, []);
   return (
     <div className="sheet-backdrop" onClick={onClose}>
-      <div className={`sheet glass ${wide ? "wide" : ""}`} role="dialog" aria-modal="true" aria-label={title} onClick={(e) => e.stopPropagation()}>
+      <div
+        ref={panelRef}
+        className={`sheet glass ${wide ? "wide" : ""}`}
+        role="dialog"
+        aria-modal="true"
+        aria-label={title}
+        onClick={(e) => e.stopPropagation()}
+      >
         <div className="sheet-head">
           <h3>{title}</h3>
           <button type="button" className="icon-btn" aria-label="Cerrar" onClick={onClose}>
@@ -1148,6 +1290,7 @@ function ModelPicker({
   current,
   params,
   factor,
+  maxDuration,
   onPick,
   onClose,
 }: {
@@ -1155,6 +1298,7 @@ function ModelPicker({
   current: string;
   params: Record<string, unknown>;
   factor: number;
+  maxDuration: number;
   onPick: (id: string) => void;
   onClose: () => void;
 }) {
@@ -1165,7 +1309,7 @@ function ModelPicker({
     const p = { ...defaultsFor(w) };
     if (w.durationKey && typeof params.duration === "number") {
       const f = w.fields.find((x) => x.key === w.durationKey);
-      if (f?.type === "int") p[w.durationKey] = Math.max(f.min, Math.min(f.max, params.duration as number));
+      if (f?.type === "int") p[w.durationKey] = Math.max(f.min, Math.min(f.max, maxDuration, params.duration as number));
     }
     return { w, e: estimate(w, p, factor), sec: Number(w.durationKey ? p[w.durationKey] : 0) };
   });
@@ -1189,7 +1333,13 @@ function ModelPicker({
       <ul className="picker-list">
         {sorted.map(({ w, e, sec }) => (
           <li key={w.id}>
-            <button type="button" className={`picker-item ${w.id === current ? "on" : ""}`} onClick={() => onPick(w.id)}>
+            <button
+              type="button"
+              className={`picker-item ${w.id === current ? "on" : ""}`}
+              onClick={() => onPick(w.id)}
+              disabled={!fitsDuration(w, maxDuration)}
+              aria-current={w.id === current}
+            >
               <span className="model-mark" aria-hidden="true">
                 {w.family.slice(0, 1)}
               </span>
@@ -1198,7 +1348,9 @@ function ModelPicker({
                   {w.name}
                   {w.id === current && <IconCheck />}
                 </span>
-                <span className="picker-blurb">{w.blurb}</span>
+                <span className="picker-blurb">
+                  {fitsDuration(w, maxDuration) ? w.blurb : `No disponible: su vídeo más corto supera el límite de ${maxDuration} s de esta web.`}
+                </span>
                 <span className="tags">
                   {w.tags.map((t) => (
                     <span className="tag" key={t}>
@@ -1299,7 +1451,7 @@ function CharacterEditor({ seed, onClose, onSave }: { seed?: string[]; onClose: 
           <label className={`ref-add ${busy ? "busy" : ""}`}>
             <input
               type="file"
-              accept="image/jpeg,image/png,image/webp"
+              accept="image/*"
               multiple
               className="sr-only"
               onChange={(e) => {
