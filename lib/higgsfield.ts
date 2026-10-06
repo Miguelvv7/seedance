@@ -102,56 +102,84 @@ async function storageError(res: Response): Promise<string> {
 }
 
 /** PUT a un enlace firmado. Sin credenciales: romperían la firma. */
-async function putSigned(url: string, bytes: ArrayBuffer, contentType: string | null): Promise<Response> {
-  return fetch(url, {
-    method: "PUT",
-    body: bytes,
-    headers: contentType ? { "Content-Type": contentType } : {},
-    signal: AbortSignal.timeout(30_000),
-  });
+async function putSigned(url: string, bytes: ArrayBuffer, headers: Record<string, string>): Promise<Response> {
+  return fetch(url, { method: "PUT", body: bytes, headers, signal: AbortSignal.timeout(30_000) });
+}
+
+/** Cabeceras que el enlace firmado exige (S3: X-Amz-SignedHeaders, GCS: X-Goog-SignedHeaders). */
+function signedHeadersOf(url: string): string[] {
+  try {
+    const q = new URL(url).searchParams;
+    const raw = q.get("X-Amz-SignedHeaders") ?? q.get("x-amz-signedheaders") ?? q.get("X-Goog-SignedHeaders") ?? "";
+    return raw.split(";").map((h) => h.trim().toLowerCase()).filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Combinaciones de cabeceras a probar con el enlace firmado.
+ * Si la firma incluye content-type, hay que mandar exactamente el tipo que se firmó;
+ * si no lo incluye, lo más seguro es no mandar ninguno.
+ */
+function headerVariants(signed: string[], requested: string, fromSlot?: string): Record<string, string>[] {
+  const types = [...new Set([fromSlot, requested, "application/octet-stream", "binary/octet-stream"].filter(Boolean) as string[])];
+  const acl = signed.includes("x-amz-acl") ? [{ "x-amz-acl": "public-read" }, { "x-amz-acl": "private" }] : [{}];
+  const out: Record<string, string>[] = [];
+  const withType = signed.length === 0 || signed.includes("content-type");
+  for (const a of acl) {
+    if (withType) for (const t of types) out.push({ "Content-Type": t, ...a });
+    out.push({ ...a });
+  }
+  return out;
 }
 
 /**
  * Sube un archivo al CDN de Higgsfield y devuelve su URL pública.
- * Prueba, en orden: el enlace firmado clásico con el tipo que indique Higgsfield,
- * el mismo enlace sin cabecera de tipo (causa típica de un 403 de firma) y,
- * por último, la subida de medios con confirmación del SDK v2.
+ * Lee qué cabeceras van firmadas en el enlace y prueba solo las combinaciones que encajan.
+ * Si la cuenta tiene la API de agentes, usa como último recurso su subida con confirmación.
  */
 export async function uploadFile(buffer: ArrayBuffer, contentType: string): Promise<string> {
-  const bytes = buffer;
   const tried: string[] = [];
 
-  // 1 y 2: enlace firmado clásico.
   try {
-    const slot = await api<{ upload_url: string; public_url: string; content_type?: string }>("/files/generate-upload-url", {
-      method: "POST",
-      body: JSON.stringify({ content_type: contentType }),
-    });
-    const signedType = slot.content_type ?? contentType;
-    let put = await putSigned(slot.upload_url, bytes, signedType);
-    if (put.ok) return slot.public_url;
-    tried.push(`enlace con tipo: ${await storageError(put)}`);
-    if (put.status === 403 || put.status === 400) {
-      put = await putSigned(slot.upload_url, bytes, null);
+    const slot = await api<{ upload_url: string; public_url: string; content_type?: string; headers?: Record<string, string> }>(
+      "/files/generate-upload-url",
+      { method: "POST", body: JSON.stringify({ content_type: contentType }) },
+    );
+    // Si Higgsfield indica cabeceras exactas, van primero.
+    if (slot.headers && typeof slot.headers === "object") {
+      const put = await putSigned(slot.upload_url, buffer, slot.headers);
       if (put.ok) return slot.public_url;
-      tried.push(`enlace sin tipo: ${await storageError(put)}`);
+      tried.push(`cabeceras de Higgsfield: ${await storageError(put)}`);
     }
+    const signed = signedHeadersOf(slot.upload_url);
+    let host = "";
+    try {
+      host = new URL(slot.upload_url).host;
+    } catch {}
+    let last = "";
+    for (const h of headerVariants(signed, contentType, slot.content_type)) {
+      const put = await putSigned(slot.upload_url, buffer, h);
+      if (put.ok) return slot.public_url;
+      last = await storageError(put);
+      if (put.status !== 403 && put.status !== 400) break; // otro tipo de fallo: no tiene sentido seguir probando
+    }
+    tried.push(`enlace firmado (${host}, firma: ${signed.join(";") || "sin lista"}): ${last}`);
   } catch (err) {
     if (err instanceof HiggsfieldHttpError && err.status === 401) throw err;
     tried.push(`enlace: ${err instanceof Error ? err.message : "error"}`);
   }
 
-  // 3: subida de medios con confirmación.
   try {
-    const ext = contentType.split("/")[1] === "png" ? "png" : contentType.split("/")[1] === "webp" ? "webp" : "jpeg";
+    const ext = contentType.endsWith("png") ? "png" : contentType.endsWith("webp") ? "webp" : "jpeg";
     const slot = await api<{ id: string; content_type: string; upload_url: string; url: string }>("/v1/agent/media", {
       method: "POST",
       body: JSON.stringify({ extension: ext, type: "image" }),
     });
-    const put = await putSigned(slot.upload_url, bytes, slot.content_type);
-    if (!put.ok) {
-      tried.push(`medios: ${await storageError(put)}`);
-    } else {
+    const put = await putSigned(slot.upload_url, buffer, { "Content-Type": slot.content_type });
+    if (!put.ok) tried.push(`medios: ${await storageError(put)}`);
+    else {
       const ok = await api<{ status: string }>(`/v1/agent/media/${encodeURIComponent(slot.id)}/confirm`, {
         method: "POST",
         body: JSON.stringify({ type: "image" }),
@@ -160,7 +188,8 @@ export async function uploadFile(buffer: ArrayBuffer, contentType: string): Prom
       tried.push(`medios: sin confirmar (${ok.status})`);
     }
   } catch (err) {
-    tried.push(`medios: ${err instanceof Error ? err.message : "error"}`);
+    const m = err instanceof Error ? err.message : "error";
+    tried.push(/agent_api_access_denied/.test(m) ? "medios: tu cuenta no tiene la API de agentes" : `medios: ${m}`);
   }
 
   console.error("upload intentos:", tried.join(" | "));
