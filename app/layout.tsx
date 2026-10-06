@@ -4,7 +4,7 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   title: "Plano",
-  description: "Convierte una descripción en un vídeo con Seedance 2.5.",
+  description: "Vídeos e imágenes con IA, tus fotos y tus personajes.",
 };
 
 export const viewport: Viewport = {

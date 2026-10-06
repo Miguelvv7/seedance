@@ -1,6 +1,15 @@
 # Plano
 
-Web para generar vídeos con Seedance 2.5 (Higgsfield) entre amigos. Muestra el precio exacto de cada vídeo antes de generarlo.
+Estudio web para crear vídeos e imágenes con los modelos de la API de Higgsfield, pensado para usarlo con amigos. Diseño estilo Apple, modo claro y oscuro, adaptado a móvil.
+
+## Qué hace
+
+- **Vídeo**: texto → vídeo, foto → vídeo, primer y último fotograma, y referencias (varias fotos o personajes en una escena).
+- **Imagen**: crear desde texto y editar a partir de tus fotos.
+- **Modelos**: Seedance 2.5 y 2.0, Kling 3.0 (Standard, Pro, Turbo, 4K), Kling O3, Kling 2.6 y 2.5 Turbo, Wan 3.0 y Prime, Wan 2.7 y 2.6, HappyHorse 1.1, MiniMax H3, Hailuo 2.3, LTX 2.5, PixVerse V6, Soul 2.0, Soul Cinema, Grok Imagine, Qwen Image 3, Ideogram 4.0, Recraft V4.1 y Z-Image. El catálogo completo está en `lib/catalog.ts`.
+- **Personajes**: con nombre y fotos, reutilizables en cualquier vídeo. Opcionalmente se entrena un **Soul ID** para usarlos en Soul 2.0 y Soul Cinema.
+- **Fotos**: se comprimen en el navegador y se suben al CDN de Higgsfield desde el servidor.
+- **Precio** antes de generar y gasto acumulado por dispositivo.
 
 ## Arrancar en local
 
@@ -17,21 +26,21 @@ npm run dev                  # http://localhost:3000
 | `HF_CREDENTIALS` | Credencial de Higgsfield, `key-id:key-secret` |
 | `APP_ACCESS_CODE` | Código que compartes con tus colegas. Cambiarlo cierra todas las sesiones |
 | `SESSION_SECRET` | Cadena aleatoria larga para firmar la sesión |
-| `MAX_DURATION` | Duración máxima por vídeo (4–30 s) |
-| `PRICE_DISCOUNT` | Descuento de tu cuenta en Higgsfield, en % (0 por defecto: precio de lista) |
+| `MAX_DURATION` | Duración máxima por vídeo (4–30 s) para controlar el gasto |
+| `PRICE_DISCOUNT` | Descuento de tu cuenta en Higgsfield, en % (0 por defecto) |
 
-## Publicar en Vercel
+## Publicar
 
 1. Sube el repo a GitHub (el `.gitignore` ya excluye `.env.local`).
-2. Importa el repo en Vercel o Netlify y añade las variables de entorno.
+2. Impórtalo en Netlify o Vercel y añade las variables de entorno.
 3. Comparte la URL y el código de acceso.
 
-## Cómo se calcula el precio
+## Precios
 
-- Tokens = `ceil(alto × ancho × segundos × 24 / 1024)`
-- Precio de lista: $0.0214 por cada 1.000 tokens en 480p y 720p, $0.0234 en 1080p ($0.206/s en 480p 16:9).
-- Si tu cuenta tiene descuento, ponlo en `PRICE_DISCOUNT` y se aplica sobre el precio de lista.
+- **Exacto**: Seedance 2.5 publica su fórmula: tokens = `ceil(alto × ancho × segundos × 24 / 1024)`, a $0.0214 por cada 1.000 tokens en 480p y 720p y $0.0234 en 1080p. En 16:9 el precio mostrado es exacto.
+- **Desde**: para el resto, Higgsfield solo publica en texto el precio mínimo por segundo o por imagen. La web lo muestra como "desde" porque el precio final sube con la calidad, el sonido o el modo.
+- **Sin precio**: modelos cuyo precio no aparece publicado.
 
-En 16:9 el precio es exacto. En otros formatos Higgsfield no publica las dimensiones, así que se muestra una estimación con "≈" y el coste real se recalcula con las dimensiones del vídeo al terminar.
+## Errores
 
-El historial y el gasto se guardan en el navegador de cada persona.
+La web llama a la API directamente (`lib/higgsfield.ts`) y muestra el motivo real que devuelve Higgsfield. El SDK oficial traduce cualquier 403 como "sin créditos", lo que confunde otros errores.
