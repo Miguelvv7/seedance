@@ -6,7 +6,15 @@ import {
   BadInputError,
 } from "@higgsfield/client/v2";
 import { client, MODEL } from "../../../lib/higgsfield";
-import { ASPECT_RATIOS, RESOLUTIONS, quote, type AspectRatio, type Resolution } from "../../../lib/pricing";
+import {
+  ASPECT_RATIOS,
+  RESOLUTIONS,
+  discountFactor,
+  quote,
+  serverDiscount,
+  type AspectRatio,
+  type Resolution,
+} from "../../../lib/pricing";
 
 export const runtime = "nodejs";
 
@@ -43,7 +51,7 @@ export async function POST(req: Request) {
       withPolling: false,
     });
     if (!res.request_id) throw new Error("Higgsfield no devolvió un identificador");
-    return NextResponse.json({ id: res.request_id, status: res.status, quote: quote(resolution, aspect, duration) });
+    return NextResponse.json({ id: res.request_id, status: res.status, quote: quote(resolution, aspect, duration, discountFactor(serverDiscount())) });
   } catch (err) {
     if (err instanceof NotEnoughCreditsError)
       return NextResponse.json({ error: "No quedan créditos en la cuenta de Higgsfield." }, { status: 402 });

@@ -6,6 +6,8 @@ import {
   RESOLUTIONS,
   billableTokens,
   costUSD,
+  discountFactor,
+  perSecondUSD,
   formatUSD,
   quote,
   type AspectRatio,
@@ -93,7 +95,8 @@ function elapsed(from: number, now: number) {
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
 }
 
-export default function Studio({ maxDuration }: { maxDuration: number }) {
+export default function Studio({ maxDuration, discount }: { maxDuration: number; discount: number }) {
+  const factor = discountFactor(discount);
   const [prompt, setPrompt] = useState("");
   const [duration, setDuration] = useState(5);
   const [resolution, setResolution] = useState<Resolution>("720p");
@@ -185,7 +188,7 @@ export default function Studio({ maxDuration }: { maxDuration: number }) {
     };
   }, [hasPending, updateTake]);
 
-  const price = useMemo(() => quote(resolution, aspect, duration), [resolution, aspect, duration]);
+  const price = useMemo(() => quote(resolution, aspect, duration, factor), [resolution, aspect, duration, factor]);
   const active = takes.find((t) => t.id === activeId) ?? null;
   const stageAspect = active ? active.aspect : aspect;
   const spent = takes.reduce((sum, t) => (t.status === "completed" ? sum + (t.actual?.usd ?? t.quote.usd) : sum), 0);
@@ -242,7 +245,7 @@ export default function Studio({ maxDuration }: { maxDuration: number }) {
     if (t.actual || !video.videoWidth) return;
     const tokens = billableTokens(video.videoWidth, video.videoHeight, t.duration);
     updateTake(t.id, {
-      actual: { width: video.videoWidth, height: video.videoHeight, tokens, usd: costUSD(tokens, t.resolution) },
+      actual: { width: video.videoWidth, height: video.videoHeight, tokens, usd: costUSD(tokens, t.resolution, factor) },
     });
   }
 
@@ -491,8 +494,9 @@ export default function Studio({ maxDuration }: { maxDuration: number }) {
 
       <footer className="foot">
         <p>
-          Seedance 2.5 vía Higgsfield. Precios oficiales de la API antes de descuentos: $0.0214 por cada 1.000 tokens
-          en 480p y 720p, y $0.0234 en 1080p. Tokens = alto × ancho × segundos × 24 / 1024.
+          Seedance 2.5 vía Higgsfield, con un {discount}% de descuento sobre el precio de lista. Por segundo en 16:9:{" "}
+          {formatUSD(perSecondUSD("480p", factor))} en 480p, {formatUSD(perSecondUSD("720p", factor))} en 720p y{" "}
+          {formatUSD(perSecondUSD("1080p", factor))} en 1080p.
         </p>
       </footer>
     </div>
